@@ -1,0 +1,1137 @@
+---
+title: "Modeling COVID-19 transmission among Shincheonji community members and in Daegu City"
+chunk_output_type: console
+editor_options:
+  chunk_output_type: console
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+
+### Daegu epidemic curve
+```{r}
+library( readxl )
+library( tidyverse )
+library( lubridate )
+d1 <- read_xlsx( "data/covid_daegu.xlsx", "incidence")
+d <- d1[,1:5]
+d$date <- ymd(d$date)
+names( d ) <- c( "date", "daily_total", "daily_shincheonji", "total", "shincheonji" )
+# dd <- tidyr::gather( d, key, val, -c(date, daily_total, daily_shincheonji, Total ) )
+
+dfs <- ymd("2020-02-07") # date first symptom
+dfc <- ymd("2020-02-18") # date first confirm
+dpc <- ymd("2020-02-22") #date policy change
+dg <- c(ymd("2020-02-15"), ymd("2020-03-01"), ymd("2020-03-15"), ymd("2020-04-01")) # regular dates for guidance
+
+
+p <- ggplot( d ) +
+  geom_bar( aes( date, total), stat="identity", fill=NA, color="black") +
+  geom_bar( aes( date, shincheonji), stat="identity", fill="grey50") +
+  scale_y_continuous( limits=c(0,8000) ) +
+  scale_x_date( limits=c(ymd("2020-02-05"), max(d$date)+1 ), 
+                labels=c(dfs, dfc, dpc, dg), 
+                breaks=c(dfs, dfc, dpc, dg), 
+                date_labels = "%b %d") +
+  labs(y="Cumulative number of cases", x="Date" ) +
+  annotate( "rect", xmin=max(d$date)-6, xmax=max(d$date)-5, ymin = 7900, ymax = 8000, fill=NA, color="black" ) +
+  annotate( "rect", xmin=max(d$date)-6, xmax=max(d$date)-5, ymin = 7700, ymax = 7800, fill="grey50" ) + 
+  annotate( "text", x = max(d$date)-3, y=c(7950,7750), label=c("Total", "Shincheonji"), hjust=0, size=2.5 ) +
+  theme_classic( base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), panel.grid.major=element_line("grey90") )
+
+p  
+# Descriptions about the government policy was then added to the figure using MS Powerpoint 
+```
+
+
+### Missing data imputation
+```{r}
+library(imputeTS)
+library(zoo)
+library(tidyverse)
+library(magrittr)
+library(lubridate)
+
+d1 <- read_xlsx( "data/covid_daegu.xlsx", "incidence")
+d2 <- d1[,1:5]
+d2$date <- ymd(d2$date)
+names( d2 ) <- c( "date", "daily_total", "daily_shincheonji", "total", "shincheonji" )
+
+shin <- na.spline( d2$shincheonji )
+# shin <- na_interpolation (d2$shincheonji)
+# shin <- na_kalman(d2$shincheonji)
+
+d <- data.frame( tot=d2$total, shin=shin, low=d2$total-shin )
+nr<-nrow(d)
+daily_tot <- d$tot[2:nr] - d$tot[1:(nr-1)]
+daily_low <- d$low[2:nr] - d$low[1:(nr-1)]
+daily_shin <- d$shin[2:nr] - d$shin[1:(nr-1)]
+
+dd <- cbind(d, data.frame(daily_tot=c(d$tot[1],daily_tot),daily_shin=c(d$shin[1],daily_shin),daily_low=c(d$low[1],daily_low) ))
+
+
+dd %<>% mutate( daily_tot_new = ifelse( daily_low < 0, daily_shin, daily_tot ),
+               daily_shin_new = ifelse( daily_low < 0, daily_tot, daily_shin ), 
+               daily_low_new = ifelse( daily_low < 0, daily_shin - daily_tot, daily_low ) )
+
+dd %<>% mutate( daily_tot_new = ifelse( daily_shin_new < 0, daily_low_new, daily_tot_new ),
+               daily_shin_new = ifelse( daily_shin_new < 0, daily_low_new - daily_tot_new, daily_shin_new ), 
+               daily_low_new = ifelse( daily_shin_new < 0, daily_tot_new, daily_low_new ) )
+
+dates <- data.frame(date=seq( ymd("2020-02-18"), by="day", length.out=nrow(dd) ))
+ddd <- cbind(dates,dd)
+names(ddd) <- c( "date", "cumul_total", "cumul_shincheonji", "cumul_low", "d_tot", "d_shin", "d_low", "daily_total", "daily_shincheonji", "daily_low" )
+ddd$cumul_total <- cumsum( ddd$daily_total )
+ddd$cumul_shincheonji <- cumsum( ddd$daily_shincheonji )
+ddd$cumul_low <- cumsum( ddd$daily_low )
+
+write_csv( ddd, "outputs/DAT_Imputed.csv" )
+
+```
+
+
+### Missing data imputation figure 
+```{r}
+library(imputeTS)
+library(tidyverse)
+library(readxl)
+library(lubridate)
+
+d1 <- read_xlsx( "data/covid_daegu.xlsx", "incidence")
+d <- d1[,1:5]
+d$date <- ymd(d$date)
+names( d ) <- c( "date", "daily_total", "daily_shincheonji", "Total", "Shincheonji" )
+
+p <- ggplot( d ) +
+  geom_bar( aes( date, Total), stat="identity", fill=NA, color="black") +
+  geom_bar( aes( date, Shincheonji), stat="identity", fill="grey50") +
+  scale_y_continuous( limits=c(0,8000) ) +
+  labs( y="Cumulative number of cases", x="Date" ) +
+  annotate( "rect", xmin=max(d$date)-9, xmax=max(d$date)-8, ymin=7900, ymax=8000, fill=NA, color="black" ) +
+  annotate( "rect", xmin=max(d$date)-9, xmax=max(d$date)-8, ymin=7500, ymax=7600, fill="grey50", color="grey50" ) + 
+  annotate( "text", x = max(d$date)-6, y=c(7950,7550), 
+            label=c("Total", "Shincheonji"), hjust=0, size=3 ) +
+  scale_x_date( date_labels = "%b %d", 
+                labels=seq( ymd("2020-02-15"), ymd("2020-03-31"), length.out=10), 
+                breaks=seq( ymd("2020-02-15"), ymd("2020-03-31"), length.out=10) )+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), panel.grid.major=element_line("grey90") ) +
+  theme_bw(base_size = 10)
+
+p  
+
+ggsave( "plots/before_impute.png", p, width=3.4, height=2.7, units="in" )
+# d$Shincheonji <- na.spline(d$Shincheonji)
+ggsave( "plots/after_impute.png", p, width=3.4, height=2.7, units="in" )
+
+```
+
+
+### FIT ABC SMC two-group SEIR tauleap
+```{r}
+rm(list=ls())
+library(tmvtnorm)
+library(truncnorm)
+library(Rcpp) 
+sourceCpp( "func/seir_2grp_tauleap_cpp.cpp" )
+source( "func/read_inputs.R" )
+source( "func/load_data.R" )  
+source( "func/model_functions.R" )
+# params_est <- readin_params( "inputs/par_fa_010.csv", cont_mat="inputs/cont_mat_3grp.csv" )
+params_est <- readin_params( "inputs/par.csv", cont_mat="inputs/cont_mat_2grp.csv" )
+params <- params_est[["params"]]
+
+set.seed(123)
+max_diff_high <- sqrt( sum( (2*DAT$daily_shincheonji)^2, na.rm=T ) )
+max_diff_low <- sqrt( sum( (2*DAT$daily_low)^2, na.rm=T ) )
+
+epsilon_inc_high <- seq( max_diff_high, round(0.06*max_diff_high), length.out=20 )
+epsilon_inc_low <- seq( max_diff_low, round(0.06*max_diff_low), length.out=20 )
+
+
+G <- length( epsilon_inc_high )# Generations of SMC
+N <- 200 # Number of particles
+n <- 3 # Number of simulations for each parameter set (since it's a deterministic model)
+lb <- c( 1,   1, 1e-6, 1e-3,  1, 1e-3  )
+ub <- c( 20, 50,  0.1,   10, 30,   20 )
+np <- length( lb ) #number of parameters
+res_old <- matrix( ncol=np, nrow=N ) #to store SMC samples for the parameters
+res_new <- matrix( ncol=np, nrow=N )
+# Empty vectors to store weights
+w_old <- matrix( ncol=1, nrow=N )
+w_new <- matrix( ncol=1, nrow=N )
+
+tbegin <- Sys.time()
+tstamp <- format( tbegin, "%m%dT%H%M" )
+simlog <- file( "outputs/simlog.log" )
+
+for( g in 1:G ){
+  i <- 1
+    while( i <= N ){
+        if( g == 1 ){ # start using prior distributions
+            par <- runif( np, min=lb, max=ub )
+            R01 <- par[1]
+            I01 <- (1-params$frac_asymp) * par[2]
+            A01 <- params$frac_asymp * par[2]
+            frac_mix <- par[3]
+            final_R01 <- par[4]
+            dur_intervention <- par[5]
+            R02 <- par[6]
+            final_R02 <- par[4]
+            
+        } else {
+            p <- sample( seq(1,N), 1, prob=w_old )
+            par <- rK( res_old[ p, ], sigma )#  Select particle from previous generation
+            R01 <- par[1]
+            I01 <- (1-params$frac_asymp) * par[2]
+            A01 <- params$frac_asymp * par[2]
+            frac_mix <- par[3]
+            final_R01 <- par[4]
+            dur_intervention <- par[5]
+            R02 <- par[6]
+            final_R02 <- par[4]
+        }
+        #  Test if prior non zero
+        if( prior_non_zero( c( R01, I01, frac_mix, final_R01, dur_intervention, R02) ) &
+            final_R01 < R01 & final_R02 < R02 ) {
+            # Set number of accepted simulations to zero
+            m <- 0
+            distance <- matrix( ncol=2, nrow=n ) # # data = 2
+            for( j in 1:n ){
+                params$R01 <- R01
+                params$init$I1 <- round(I01)
+                params$init$A1 <- round(A01)
+                params$init$S1 <- params$pop_high - I01
+                params$cm <- c(1-frac_mix, frac_mix, frac_mix, 1-frac_mix)
+                params$final_R01 <- final_R01
+                params$time_intervention_stop <- params$time_intervention_start + dur_intervention
+                params$R02 <- R02
+                params$final_R02 <- final_R02
+                
+                Dstar <- run_model_tauleap( params )     
+                calc_dist <- calc_distance( Dstar[[1]], Dstar[[2]] )
+                distance[ j, ] <- calc_dist    
+                if( (calc_dist[1] <= epsilon_inc_high[g]) & (calc_dist[2] <= epsilon_inc_low[g])){
+                    m <- m + 1
+                }
+                # if( (calc_dist[1] + calc_dist[2]) <= (epsilon_inc_high[g] + epsilon_inc_low[g]) ){
+                #     m <- m + 1
+                # }
+            }   
+            if( m > 0 ){
+                res_new[ i, ]<- c( R01, I01, frac_mix, final_R01, dur_intervention, R02 )   # Store results
+                w1 <- prod( sapply(1:length(ub), function(x) dunif( res_new[ i, x ], min=lb[x], max=ub[x] ) ) ) # Calculate weights
+                if( g==1 ){
+                    w2 <- 1
+                } else {
+                    w2 <- sum( sapply( 1:N, function(x) w_old[x]* dtmvnorm( res_new[ i, ], res_old[ x,], sigma, lb, ub ) ) )
+                }
+                w_new[ i ] <- (m/n)*w1/w2
+                
+                if( i%%20 == 0 ){# to monitor the progress
+                  tnow <-  Sys.time()
+                  telapsed <- round( difftime( tnow, tbegin, units = "mins")[[1]], digits=1 )
+                  log <- paste0( 'Gen=', g, ", Particle=", i, ", time=", format( tnow, "%H:%M:%S" ), ", minutes elapsed=", telapsed )
+                  print( log )
+                  cat( log, file = simlog, append=TRUE ) # creates file and writes to it
+
+                }
+                i <- i + 1
+            }
+        } 
+    }
+    
+    sigma <- cov( res_new )
+    res_old <- res_new
+    w_old <- w_new / sum( w_new )
+
+    write.csv( res_new, file=paste0("outputs/tauleap_", g, ".csv"), row.names=FALSE )
+}
+
+write.csv( res_new, paste0("outputs/samples_", tstamp, ".csv"), row.names=FALSE  )
+write.csv( params, paste0("outputs/params_", tstamp, ".csv"), row.names=FALSE )
+saveRDS( seir_2grp_tauleap, paste0("outputs/seir_2grp_tauleap_", tstamp, ".rds") )
+```
+
+
+### Sensitivity analysis 1 - fitting the model under the assumption that infected people become infectious 2-3 days prior to symptom onset
+```{r}
+rm(list=ls())
+library(tmvtnorm)
+library(truncnorm)
+library(Rcpp) 
+sourceCpp( "codes/seir_2grp_tauleap_cpp.cpp" )
+source( "codes/read_inputs.R" )
+source( "codes/load_data.R" )  
+source( "codes/model_functions.R" )
+# params_est <- readin_params( "inputs/par_fa_010.csv", cont_mat="inputs/cont_mat_3grp.csv" )
+params_est <- readin_params( "inputs/par.csv", cont_mat="inputs/cont_mat_2grp.csv" )
+params <- params_est[["params"]]
+## sensitivity analysis
+## latent stage becomes shorter by 2.2 days and time from becoming infectious to isolation increases by 2.2 days.
+params$delta <- 1/((1/params$delta) - 2.2)
+params$rate_isol <- 1/((1/params$rate_isol) + 2.2)
+  
+set.seed(123)
+max_diff_high <- sqrt( sum( (2*DAT$daily_shincheonji)^2, na.rm=T ) )
+max_diff_low <- sqrt( sum( (2*DAT$daily_low)^2, na.rm=T ) )
+
+epsilon_inc_high <- seq( max_diff_high, round(0.06*max_diff_high), length.out=20 )
+epsilon_inc_low <- seq( max_diff_low, round(0.06*max_diff_low), length.out=20 )
+
+# epsilon_inc_high <- c( epsilon_inc_high[1:7], seq(epsilon_inc_high[8], epsilon_inc_high[10], length.out=10 ) )
+# epsilon_inc_low <- c( epsilon_inc_low[1:7], seq(epsilon_inc_low[8], epsilon_inc_low[10], length.out=10 ) )
+
+G <- length( epsilon_inc_high )# Generations of SMC
+N <- 200 # Number of particles
+n <- 3 # Number of simulations for each parameter set (since it's a deterministic model)
+lb <- c( 1,   1, 1e-6, 1e-3,  1, 1e-3  )
+ub <- c( 20, 50,  0.1,   10, 30,   20 )
+np <- length( lb ) #number of parameters
+res_old <- matrix( ncol=np, nrow=N ) #to store SMC samples for the parameters
+res_new <- matrix( ncol=np, nrow=N )
+# Empty vectors to store weights
+w_old <- matrix( ncol=1, nrow=N )
+w_new <- matrix( ncol=1, nrow=N )
+
+tbegin <- Sys.time()
+tstamp <- format( tbegin, "%m%dT%H%M" )
+simlog <- file("outputs/simlog.log")
+
+for( g in 1:G ){
+  i <- 1
+    while( i <= N ){
+        if( g == 1 ){ # start using prior distributions
+            par <- runif( np, min=lb, max=ub )
+            R01 <- par[1]
+            I01 <- (1-params$frac_asymp) * par[2]
+            A01 <- params$frac_asymp * par[2]
+            frac_mix <- par[3]
+            final_R01 <- par[4]
+            dur_intervention <- par[5]
+            R02 <- par[6]
+            final_R02 <- par[4]
+            
+        } else {
+            p <- sample( seq(1,N), 1, prob=w_old )
+            par <- rK( res_old[ p, ], sigma )#  Select particle from previous generation
+            R01 <- par[1]
+            I01 <- (1-params$frac_asymp) * par[2]
+            A01 <- params$frac_asymp * par[2]
+            frac_mix <- par[3]
+            final_R01 <- par[4]
+            dur_intervention <- par[5]
+            R02 <- par[6]
+            final_R02 <- par[4]
+        }
+        #  Test if prior non zero
+        if( prior_non_zero( c( R01, I01, frac_mix, final_R01, dur_intervention, R02) ) &
+            final_R01 < R01 & final_R02 < R02 ) {
+            # Set number of accepted simulations to zero
+            m <- 0
+            distance <- matrix( ncol=2, nrow=n ) # # data = 2
+            for( j in 1:n ){
+                params$R01 <- R01
+                params$init$I1 <- round(I01)
+                params$init$A1 <- round(A01)
+                params$init$S1 <- params$pop_high - I01
+                params$cm <- c(1-frac_mix, frac_mix, frac_mix, 1-frac_mix)
+                params$final_R01 <- final_R01
+                params$time_intervention_stop <- params$time_intervention_start + dur_intervention
+                params$R02 <- R02
+                params$final_R02 <- final_R02
+                
+                Dstar <- run_model_tauleap( params )     
+                calc_dist <- calc_distance( Dstar[[1]], Dstar[[2]] )
+                distance[ j, ] <- calc_dist    
+                if( (calc_dist[1] <= epsilon_inc_high[g]) & (calc_dist[2] <= epsilon_inc_low[g])){
+                    m <- m + 1
+                }
+                # if( (calc_dist[1] + calc_dist[2]) <= (epsilon_inc_high[g] + epsilon_inc_low[g]) ){
+                #     m <- m + 1
+                # }
+            }   
+            if( m > 0 ){
+                res_new[ i, ]<- c( R01, I01, frac_mix, final_R01, dur_intervention, R02 )   # Store results
+                w1 <- prod( sapply(1:length(ub), function(x) dunif( res_new[ i, x ], min=lb[x], max=ub[x] ) ) ) # Calculate weights
+                if( g==1 ){
+                    w2 <- 1
+                } else {
+                    w2 <- sum( sapply( 1:N, function(x) w_old[x]* dtmvnorm( res_new[ i, ], res_old[ x,], sigma, lb, ub ) ) )
+                }
+                w_new[ i ] <- (m/n)*w1/w2
+                
+                if( i%%20 == 0 ){# to monitor the progress
+                  tnow <-  Sys.time()
+                  telapsed <- round( difftime( tnow, tbegin, units = "mins")[[1]], digits=1 )
+                  log <- paste0( 'Gen=', g, ", Particle=", i, ", time=", format( tnow, "%H:%M:%S" ), ", minutes elapsed=", telapsed )
+                  print( log )
+                  cat( log, file = simlog, append=TRUE ) # creates file and writes to it
+
+                }
+                i <- i + 1
+            }
+        } 
+    }
+    
+    sigma <- cov( res_new )
+    res_old <- res_new
+    w_old <- w_new / sum( w_new )
+
+    write.csv( res_new, file=paste0("outputs/tauleap_", g, ".csv"), row.names=FALSE )
+}
+
+write.csv( res_new, paste0("outputs/samples_", tstamp, ".csv"), row.names=FALSE  )
+write.csv( params_est[["savepar"]], paste0("outputs/params_", tstamp, ".csv"), row.names=FALSE )
+write.csv( DAT, paste0("outputs/DAT_", tstamp, ".csv"), row.names = FALSE )
+saveRDS( seir_2grp_tauleap, paste0("outputs/seir_2grp_tauleap_", tstamp, ".rds") )
+```
+
+
+### POSTERIOR distribution 
+```{r}
+# tstamp <- "0522T1228"
+tstamp <- "0614T2133" # shorter latent period
+# tstamp <- "0614T1722"
+p <- read.csv( paste0("outputs/samples_", tstamp, ".csv") )
+
+library(ggplot2)
+theme_set(theme_bw(base_size = 12))
+
+pr = c( 0.025, 0.25, 0.5, 0.75, 0.975 )
+quantile( p$V1, probs=pr )
+quantile( round(p$V2), probs=pr )
+quantile( p$V3, probs=pr )
+quantile( p$V4, probs=pr )
+quantile( p$V5, probs=pr )
+quantile( p$V6, probs=pr )
+
+pq <- sapply( 1:6, function(x) quantile( p[,x], probs=pr ) )
+
+d <- cbind( 
+  data.frame( 
+    par = c("R01", "I0", "Mixing", "Final_R0", "Intervention days", "R02"),
+    id = (6-c(1, 4, 6, 3, 5, 2))),
+  as.data.frame( t(pq) ) )
+
+plt <- ggplot(d) +
+  geom_segment( aes(y=`2.5%`, yend=`97.5%`, x=id, xend=id), size=1 ) +
+  geom_segment( aes(y=`25%`, yend=`75%`, x=id, xend=id), size=1.6 ) +
+  geom_point( aes(id, `50%`), size=2.2, color="red" ) +
+  scale_x_continuous( name="Parameters",labels=c(expression(italic(c)~"*"), expression(italic(d)), expression(italic(I)[0]), expression(italic(R)~"*"), expression(italic(R)[0]^2), expression(italic(R)[0]^1)) ) + 
+  scale_y_continuous( name="Value" ) +
+  annotate( "text", x=5, y=15, label="B", hjust=0, vjust=0.5, size=3 ) +
+  coord_flip() 
+  
+# ggsave(paste0( "plots/params_", tstamp, ".png"), plt, width=3.4, height=2.7, units="in" )
+
+
+### correlation plot
+library(ggplot2)
+library(GGally)
+theme_set(theme_bw(base_size=12))
+plt <- ggpairs( p, 
+         columnLabels=c( "italic(R)[0]^1", "italic(I)[0]", 'italic(c)~"*"', 'italic(R)~"*"', "italic(d)", "italic(R)[0]^2" ), 
+         labeller = "label_parsed") 
+
+# ggsave(paste0( "plots/params_coor_", tstamp, ".png"), plt, width=3.4*2, height=2.7*2, units="in" )
+  # columnLabels = c( "italic(R)[0]^1", "italic(I)[0]", "italic(c)~\*", "italic(R)~\*", "italic(d)", "italic(R)[0]^2" ),
+
+
+ggplot(p) +
+  geom_histogram( aes(x=V1,y=..density..), fill="red", alpha=0.6 ) +
+  labs( y="Density", x=expression(italic(R)[0]~"in"~"Shincheonji") ) +
+  geom_density(aes(x=V1,y=..density..), size=1.0 ) +
+  annotate( "text", x=min(p$V1), y=0.35, size=5, label="B", hjust=0, vjust=0.5 )
+
+# ggsave(paste0( "plots/R0_shinchenji_", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )
+
+ggplot(p) +
+  geom_histogram( aes(x=V6,y=..density..), fill="red", alpha=0.6 ) +
+  labs( y="Density", x=expression(italic(R)[0]~"in"~"non-Shincheonji") ) +
+  geom_density(aes(x=V6,y=..density..), size=1.0 ) +
+  annotate( "text", x=min(p$V6), y=0.35, size=5, label="C", hjust=0, vjust=0.5 )
+
+# ggsave(paste0( "plots/R0_non-shinchenji_", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )
+
+ggplot(p) +
+  geom_histogram( aes(x=V2,y=..density..), fill="red", alpha=0.6 ) +
+  labs( y="Density", x="Infected people on Feb 7" ) +
+  geom_density(aes(x=V2,y=..density..), size=1.2 ) +
+  annotate( "text", x=min(p$V2), y=0.15, size=5, label="D", hjust=0, vjust=0.5 )
+
+# ggsave(paste0( "plots/Infecteds_Feb7_", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )
+
+ggplot(p) +
+  geom_histogram( aes(x=V6,y=..density..), fill="blue", alpha=0.4 ) +
+  labs(title="Non-Shincheonji", y="Density", x=expression(italic(R)[0]) ) +
+  geom_density(aes(x=V6,y=..density..), size=1.0 ) +
+  theme_bw(base_size = 14)
+  # annotate( "text", x=min(p$V1), y=0.35, size=5, label="c", hjust=0, vjust=0.5 )
+
+# ggsave(paste0( "plots/R0_non-shinchenji_", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )
+
+
+
+# hist( p$V1, breaks=10, ylab="Frequency", xlab="R01", main="R01" )
+# hist( p$V2, breaks=10, ylab="Frequency", xlab="I0", main="Number of initially infectious people" )
+# hist( p$V3, breaks=10, ylab="Frequency", xlab="Mixing proportion", main="Mixing proportion" )
+# hist( p$V4, breaks=10, ylab="Frequency", xlab="Min_R0", main="R0 toward the end of the outbreak" )
+# hist( p$V5, breaks=10, ylab="Frequency", xlab="Intervention days", main="Duration of intervention" )
+# hist( p$V6, breaks=10, ylab="Frequency", xlab="R02", main="R02" )
+
+library("bayesplot")
+color_scheme_set("red")
+
+names(p) = c("R01", "I0", "Mixing", "Final_R01", "Intervention days", "R02")
+
+# mcmc_intervals( p, pars = c(expression(beta[1]), "I0", "mix", "t*", "daily_reduc"))
+mcmc_pairs( p, pars = c("R01", "I0", "Mixing", "Final_R01", "Intervention days", "R02"),
+            labels = c( expression(italic(R)[0]^1), expression(italic(I)[0]), expression(italic(c)~"*"), expression(italic(R)~"*"), expression(italic(d)), expression(italic(R)[0]^2) ),  
+            off_diag_args = list(size=2, alpha=1/3) )
+
+plt <- mcmc_pairs( p, pars = c( expression(italic(R)[0]^1), expression(italic(I)[0]), expression(italic(c)~"*"),  expression(italic(R)~"*"), expression(italic(d)), expression(italic(R)[0]^2) ),
+                  off_diag_args = list(size=2, alpha=1/3) )
+
+# ggsave(paste0( "plots/pairs_", tstamp, ".png"), p, width=3.4*4, height=2.7*4, units="in" )
+
+p2 <- p[,1:2]
+names(p2) = c("R01", "I0")
+# mcmc_intervals( p, pars = c(expression(beta[1]), "I0", "mix", "t*", "daily_reduc"))
+mcmc_pairs( p2, pars = c("R01", "I0"), 
+            off_diag_args = list(size=2, alpha=1/3) )
+
+# p <- mcmc_pairs( p, pars = c("beta1", "I0", "mix", "t*", "daily_reduc"),
+#             off_diag_args = list(size=2, alpha=1/3) )
+# plots <- p$bayesplots # modify each plot
+# library(ggplot2)
+# for( ii in seq_along(p) ){
+#   plots[[ii]] <- plots[[ii]] + theme(text=element_text(size=12,  family="TT Arial"))
+# }
+# pp <- bayesplot_grid(plots = plots)
+# tstamp <- format( Sys.time(), "%m%dT%H%M" )
+# ggsave(paste0( "plots/pairs_", tstamp, ".png"), pp, width=3.4*2, height=2.7*2, units="in" )
+
+
+
+```
+
+### Run 2 Group SEIR Tauleap 
+```{r}
+
+tstamp <- "0522T1228"
+tstamp <- "0614T2133"
+library(Rcpp)
+library(tidyverse)
+sourceCpp( "codes/seir_2grp_tauleap_cpp.cpp" )
+source( "codes/read_inputs.R" )
+source( "codes/load_data.R" )
+source( "codes/model_functions.R" )
+
+par <- read_csv( paste0( "outputs/samples_", tstamp, ".csv" ) ) ## estimated params
+DAT <- read_csv( paste0( "outputs/DAT_", tstamp, ".csv" ) )
+params <- read_csv( paste0( "outputs/params_", tstamp, ".csv" ) )
+# xx <- readRDS( paste0( "outputs/seir_2grp_tauleap_", tstamp, ".rds" ) )
+
+set.seed(123)
+
+params_est <- readin_params( "inputs/par.csv", cont_mat="inputs/cont_mat_2grp.csv" )
+params <- params_est[["params"]]
+
+## alternative definitions (tstamp <- "0614T2133")
+params$delta <- 1/((1/params$delta) - 2.2)
+params$rate_isol <- 1/((1/params$rate_isol) + 2.2)
+
+nday <- as.integer(params[["ndays"]])
+
+res_high <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+res_low <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+I_high <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+I_low <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+CI_high <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+CI_low <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+
+## dates on the first column
+dates <- seq( ymd("2020-02-07"), by="day", length.out=nrow(res_high) )
+res_high[,1] <- dates
+res_low[,1] <- dates
+
+for( ii in seq_len(nrow(par)) ){
+
+  params$R01 <- as.double( par[ ii, 1 ] )
+  I01 <- (1-params$frac_asymp) * as.double( par[ ii, 2 ] )
+  A01 <- params$frac_asymp * as.double( par[ ii, 2 ] )
+  params$init$I1 <- round( I01 )
+  params$init$A1 <- round( A01 )
+  params$init$S1 <- params$pop_high - I01
+  mix <- as.double( par[ ii, 3 ] )
+  params$cm <- c( 1 - mix, mix, mix, 1-mix )
+  params$final_R01 <- as.double( par[ ii, 4 ] )
+  params$time_intervention_stop <- params$time_intervention_start + as.double( par[ ii, 5 ] )
+  params$R02 <- as.double( par[ ii, 6 ] )
+  params$final_R02 <-  as.double( par[ ii, 4 ] )
+
+  res <- seir_2grp_tauleap( params )
+
+  res_high[ , ii ] <- res$X1[ params$day_filter ]
+  res_low[ , ii ] <- res$X2[ params$day_filter ]
+  I_high[ , ii ] <- res$I1[ params$day_filter ]
+  CI_high[ , ii ] <- res$CI1[ params$day_filter ]
+  I_low[ , ii ] <- res$I2[ params$day_filter ]
+  CI_low[ , ii ] <- res$CI2[ params$day_filter ]
+
+}
+
+### cumulative incidence
+nc <- ncol( res_high )
+nr <- nrow( res_high )
+
+res_tot <- res_high + res_low # excluding dates on the first column
+pr <- c(0.025, 0.25, 0.5, 0.75, 0.975)
+
+inc_high <- CI_high
+inc_low <- CI_low
+inc_low <- CI_low[ 2:nr, ] - CI_low[ 1:(nr-1), ]
+inc_high <- CI_high[ 2:nr, ] - CI_high[ 1:(nr-1), ]
+
+res_tot_summary = apply( res_tot, 1, quantile, probs=pr )
+res_high_summary = apply( res_high, 1, quantile, probs=pr )
+res_low_summary = apply( res_low, 1, quantile, probs=pr )
+
+inc_high_summary = apply( inc_high, 1, quantile, probs=pr )
+inc_low_summary = apply( inc_low, 1, quantile, probs=pr )
+
+sim <- data.frame(rbind(
+    data.frame(pop = 1, date=dates, q025=res_high_summary[1,],
+               q250=res_high_summary[2,], q500=res_high_summary[3,],
+               q750=res_high_summary[4,], q975=res_high_summary[5,]),
+    data.frame(pop = 2, date=dates, q025=res_low_summary[1,],
+               q250=res_low_summary[2,], q500=res_low_summary[3,],
+               q750=res_low_summary[4,], q975=res_low_summary[5,]),
+    data.frame(pop = 3, date=dates, q025=res_tot_summary[1,],
+               q250=res_tot_summary[2,], q500=res_tot_summary[3,],
+               q750=res_tot_summary[4,], q975=res_tot_summary[5,])))
+
+daily_low <- res_low
+daily_low[ 2:nr, ] <- res_low[ 2:nr, ] - res_low[ 1:(nr-1), ]
+daily_high <- res_high
+daily_high[ 2:nr, ] <- res_high[ 2:nr, ] - res_high[ 1:(nr-1), ]
+
+d_high_summary = apply( daily_high, 1, quantile, probs=pr )
+d_low_summary = apply( daily_low, 1, quantile, probs=pr )
+
+sim_daily <- data.frame(rbind(
+    data.frame(pop = 1, date=dates, q025=d_high_summary[1,],
+               q250=d_high_summary[2,], q500=d_high_summary[3,],
+               q750=d_high_summary[4,], q975=d_high_summary[5,]),
+    data.frame(pop = 2, date=dates, q025=d_low_summary[1,],
+               q250=d_low_summary[2,], q500=d_low_summary[3,],
+               q750=d_low_summary[4,], q975=d_low_summary[5,])　) )
+
+sim_daily$pop <- factor( sim_daily$pop, labels=c("High risk", "Low risk") )
+sim$pop <- factor( sim$pop, labels=c("High risk", "Low risk", "Total") )
+
+# saveRDS( sim, paste0("outputs/sim_", tstamp, ".rds" ) )
+# saveRDS( sim_daily, paste0("outputs/sim_daily_", tstamp, ".rds" ) )
+
+sim <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
+sim_daily <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
+
+low <- dplyr::filter( sim, pop =="Low risk" )
+high <- dplyr::filter( sim, pop =="High risk" )
+
+library(ggplot2)
+theme_set( theme_bw(base_size = 12) )
+
+ggplot( low ) +
+  geom_ribbon( aes(x=date, ymin=q025, ymax=q975), fill="blue",  alpha=0.2) +
+  geom_ribbon( aes(x=date, ymin=q250, ymax=q750), fill="blue",  alpha=0.4) +
+  geom_line( aes(date, q500), color="blue", size=1.2 ) +
+  # geom_ribbon( data=high, aes(x=date, ymin=q025, ymax=q975), fill="red", alpha=0.2, inherit.aes=FALSE) +
+  # geom_ribbon( data=high, aes(x=date, ymin=q250, ymax=q750),  fill="red", alpha=0.4, inherit.aes=FALSE) +
+  # geom_line( data=high, aes(date, q500), color="red", size=1.2, inherit.aes=FALSE ) +
+  geom_point( data=DAT, aes(date, cumul_low), color="blue", inherit.aes=FALSE ) +
+  # geom_point( data=DAT, aes(date, cumul_shincheonji), color="red", inherit.aes=FALSE ) +
+  labs(title="Non-Shincheonji", x="Date", y="Cumulative number of cases") +
+  scale_x_date()
+
+# tstamp <- format( Sys.time(), "%m%dT%H%M" )
+# ggsave( paste0("plots/low_risk_cumul_", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )  
+  
+ggplot( high ) +
+  geom_ribbon( data=high, aes(x=date, ymin=q025, ymax=q975), fill="red", alpha=0.2, inherit.aes=FALSE) +
+  geom_ribbon( data=high, aes(x=date, ymin=q250, ymax=q750),  fill="red", alpha=0.4, inherit.aes=FALSE) +
+  geom_line( data=high, aes(date, q500), color="red", size=1.2, inherit.aes=FALSE ) +
+  geom_point( data=DAT, aes(date, cumul_shincheonji), color="darkred", inherit.aes=FALSE ) +
+  labs(title="Shincheonji", x="Date", y="Cumulative number of cases") +
+  scale_x_date()
+
+# ggsave( paste0("plots/high_risk_cumul_", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )  
+
+d_low <- dplyr::filter( sim_daily, pop =="Low risk" )
+d_high <- dplyr::filter( sim_daily, pop =="High risk" )
+
+
+ggplot( d_low ) +
+  geom_ribbon( aes(x=date, ymin=q025, ymax=q975), fill="blue",  alpha=0.2) +
+  geom_ribbon( aes(x=date, ymin=q250, ymax=q750), fill="blue",  alpha=0.4) +
+  geom_line( aes(date, q500), color="blue", size=1.2 ) +
+  # geom_ribbon( data=d_high, aes(x=date, ymin=q025, ymax=q975), fill="red", alpha=0.2, inherit.aes=FALSE) +
+  # geom_ribbon( data=d_high, aes(x=date, ymin=q250, ymax=q750),  fill="red", alpha=0.4, inherit.aes=FALSE) +
+  # geom_line( data=d_high, aes(date, q500), color="red", size=1.2, inherit.aes=FALSE ) +
+  geom_point( data=DAT, aes(date, daily_low), inherit.aes=FALSE ) +
+  geom_line( data=DAT, aes(date, daily_low), inherit.aes=FALSE ) +
+  # geom_point( data=DAT, aes(date, daily_shincheonji), color="red", inherit.aes=FALSE ) +
+  labs(title="Non-Shincheonji",x="Date", y="Daily confirmed case") +
+  scale_x_date() +
+  scale_y_continuous(limits=c(0,550)) +
+  annotate( "segment", x=ymd("2020-03-23"), xend=ymd("2020-03-25"), y=500, yend=500, size=1 ) +
+  annotate( "point", x=ymd("2020-03-24"), y=500, size=1.4 ) +
+  annotate( "text", x=ymd("2020-03-26"), y=500, size=4, label="Data", hjust=0, vjust=0.5 )+
+  annotate( "segment", x=ymd("2020-03-23"), xend=ymd("2020-03-25"), y=475, yend=475, size=1, color="blue" ) +
+  annotate("rect", xmin=ymd("2020-03-23"), xmax=ymd("2020-03-25"), ymin=465, ymax=485, alpha=0.2, fill="blue") + 
+  annotate("rect", xmin=ymd("2020-03-23"), xmax=ymd("2020-03-25"), ymin=470, ymax=480, alpha=0.4, fill="blue") + 
+  annotate( "text", x=ymd("2020-03-26"), y=475, size=4, label="Model", hjust=0, vjust=0.5 ) +
+  annotate( "text", x=ymd("2020-02-07"), y=550, label="B", hjust=0, vjust=0.5, size=5 )
+
+  
+# tstamp <- format( Sys.time(), "%m%dT%H%M" )
+# ggsave( paste0("plots/low_risk_daily_", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )
+
+ggplot( d_high ) +
+  geom_ribbon( aes(x=date, ymin=q025, ymax=q975), fill="red",  alpha=0.2) +
+  geom_ribbon( aes(x=date, ymin=q250, ymax=q750), fill="red",  alpha=0.4) +
+  geom_line( aes(date, q500), color="darkred", size=1.2 ) +
+  geom_point( data=DAT, aes(date, daily_shincheonji), inherit.aes=FALSE ) +
+  geom_line( data=DAT, aes(date, daily_shincheonji), inherit.aes=FALSE ) +
+  labs(title="Shincheonji", x="Date", y="Daily confirmed case") +
+  scale_x_date() +
+  scale_y_continuous(limits=c(0,550)) +
+  annotate( "segment", x=ymd("2020-03-23"), xend=ymd("2020-03-25"), y=500, yend=500, size=1 ) +
+  annotate( "point", x=ymd("2020-03-24"), y=500, size=1.4 ) +
+  annotate( "text", x=ymd("2020-03-26"), y=500, size=4, label="Data", hjust=0, vjust=0.5 )+
+  annotate( "segment", x=ymd("2020-03-23"), xend=ymd("2020-03-25"), y=475, yend=475, size=1, color="red" ) +
+  annotate("rect", xmin=ymd("2020-03-23"), xmax=ymd("2020-03-25"), ymin=465, ymax=485, alpha=0.2, fill="red") + 
+  annotate("rect", xmin=ymd("2020-03-23"), xmax=ymd("2020-03-25"), ymin=470, ymax=480, alpha=0.4, fill="red") + 
+  annotate( "text", x=ymd("2020-03-26"), y=475, size=4, label="Model", hjust=0, vjust=0.5 ) +
+  annotate( "text", x=ymd("2020-02-07"), y=550, size=5, label="A", hjust=0, vjust=0.5 )
+
+# ggsave( paste0("plots/high_risk_daily_", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )
+
+#library(gridExtra)
+#p <- grid.arrange( p1, p2, p3, p4, nrow = 4)
+#p
+# text( ymd("2020-03-1"), 1.2e4, paste0("Outbreak size (median) = ", formatC(q500, format="d", big.mark=',') ), pos=4 )
+# text( ymd("2020-03-1"), 1.1e4, paste0("Outbreak size (50%) = ", formatC(q250, format="d", big.mark=','), ", ",  formatC(q500, format="d", big.mark=',')), pos=4  )
+# text( ymd("2020-03-1"), 1.0e4, paste0("Outbreak size (95%) = ", formatC(q025, format="d", big.mark=','), ", ",  formatC(q975, format="d", big.mark=',')), pos=4  )
+
+# total <- dplyr::filter( sim, pop == 3 )
+# high <- dplyr::filter( sim, pop == 1 )
+
+
+### Figure 3A. Comparision of cumulative number of cases 
+
+sim <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
+sim_daily <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
+
+library(ggplot2)
+theme_set( theme_bw(base_size = 12) )
+total <- dplyr::filter( sim, pop == "Total" )
+high <- dplyr::filter( sim, pop == "High risk" )
+
+
+d0 <- read_xlsx( "data/covid_daegu.xlsx", "incidence")
+d <- d0[,1:5]
+d$date <- ymd(d$date)
+names( d ) <- c( "date", "daily_total", "daily_shincheonji", "Total", "Shincheonji" )
+# dd <- tidyr::gather( d, key, val, -c(date, daily_total, daily_shincheonji, Total ) )
+dfs <- ymd("2020-02-07") # date first symptom
+dfc <- ymd("2020-02-18") # date first confirm
+dpc <- ymd("2020-02-22") #date policy change
+dg <- c(ymd("2020-02-15"), ymd("2020-03-01"), ymd("2020-03-15"), ymd("2020-04-01")) # regular dates for guidance
+
+xd <- ymd("2020-02-07")
+yy <- 7800 
+
+plt <- ggplot( d ) +
+  geom_bar( aes( date, Total), stat="identity", fill=NA, color="black") +
+  geom_bar( aes( date, Shincheonji), stat="identity", fill="grey50") +
+  # geom_ribbon( data=total, aes(x=date, ymin=q025, ymax=q975), fill="steelblue",  alpha=0.2, inherit.aes=F ) +
+  geom_ribbon( data=total, aes(x=date, ymin=q250, ymax=q750), fill="steelblue",  alpha=0.4, inherit.aes=F ) +
+  geom_line( data=total, aes(date, q500), color="steelblue", size=1.2, inherit.aes=F ) +
+  # geom_ribbon( data=high, aes(x=date, ymin=q025, ymax=q975), fill="darkred",  alpha=0.2, inherit.aes=F ) +
+  geom_ribbon( data=high, aes(x=date, ymin=q250, ymax=q750), fill="darkred",  alpha=0.4, inherit.aes=F ) +
+  geom_line( data=high, aes(date, q500), color="darkred", size=1.2, inherit.aes=F ) +
+  # scale_y_continuous( limits=c(0,8000)) +
+  scale_x_date( limits=c(ymd("2020-02-05"), max(d$date)+1 ), 
+                labels=c(dfs, dfc, dpc, dg), 
+                breaks=c(dfs, dfc, dpc, dg), 
+                date_labels = "%b %d") +
+  labs(y="Cumulative confirmed cases", x="Date", size=7 ) +
+  theme( axis.text.x = element_text(angle = 45, hjust=1) ) +
+  theme( axis.title.y = element_text(size=11) ) +
+
+  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy, ymax=yy+200, alpha=0.4, fill="steelblue") +
+  annotate( "segment", x=xd, xend=xd+2, y=yy+100, yend=yy+100, size=1, color="steelblue" ) +
+  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy-300, ymax=yy-100, alpha=0.4, fill="darkred") +
+  annotate( "segment", x=xd, xend=xd+2, y=yy-200, yend=yy-200, size=1, color="darkred" ) +
+  annotate( "text", x=xd+3, y=yy+100, size=1.5, label="Total (model)", hjust=0, vjust=0.5 ) +
+  annotate( "text", x=xd+3, y=yy-200, size=1.5, label="Shincheonji (model)", hjust=0, vjust=0.5 ) + 
+  
+  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy-600, ymax=yy-400, fill=NA, color="black" ) +
+  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy-900, ymax=yy-700, fill="grey50", color="black" ) +
+  annotate( "text", x=xd+3, y=yy-500, size=1.5, label="Total (data)", hjust=0, vjust=0.5 ) +
+  annotate( "text", x=xd+3, y=yy-800, size=1.5, label="Shincheonji (data)", hjust=0, vjust=0.5 ) +
+  annotate( "text", x=ymd("2020-3-31"), y=8000, label="A", hjust=0, vjust=0.5, size=3 )
+  
+ggsave( paste0("plots/cumul_data_model_", tstamp, ".png"), plt, width=3.4, height=2.7, units="in" )
+
+```
+
+
+## Effective reproduction number
+```{r}
+
+## Calculate varying delay
+# library(Rcpp)
+# library(tidyverse) 
+# sourceCpp( "codes/seir_2grp_tauleap_cpp.cpp" )
+# source( "codes/read_inputs.R" )
+# source( "codes/load_data.R" )  
+# source( "codes/model_functions.R" )
+# 
+# # tstamp <- "0518T2149"
+# par <- read_csv( paste0( "outputs/samples_", tstamp, ".csv" ) ) ## estimated params
+# 
+# set.seed(123)
+# 
+# params_est <- readin_params( "inputs/par.csv", cont_mat="inputs/cont_mat_2grp.csv" )
+# params <- params_est[["params"]]
+# 
+rrxa <- params$rel_rate_isol_asymp
+base_rate <- params$rate_isol
+base_rate_asymp <- params$rate_isol*rrxa
+max_rate <-params$max_rate_isol
+gamma <- params$gamma
+fa <- params$frac_asymp
+base_dur <- (1-fa)/(gamma+base_rate) + fa/(gamma+base_rate*rrxa);
+np <- nrow(par)
+rate <- matrix( rep( base_rate, nr*np ), ncol=np )
+rate_asymp <- matrix( rep( base_rate_asymp, nr*np ), ncol=np )
+R1 <- matrix( rep( NA, nr*np ), ncol=np )
+R2 <- matrix( rep( NA, nr*np ), ncol=np )
+beta1 <- matrix( rep( NA, nr*np ), ncol=np )
+beta2 <- matrix( rep( NA, nr*np ), ncol=np )
+
+dur <- matrix( rep( base_dur, nr*np ), ncol=np )
+t_int_start <- params$time_intervention_start
+ # c("R01", "I0", "Mixing", "Final_R01", "Intervention days", "R02"), 
+ # double patch1 = tau*beta1*( I1*cm[0]+I2*cm[2] )/( N1*cm[0]+N2*cm[2] );
+ #  double patch2 = tau*beta2*( I1*cm[1]+I2*cm[3] )/( N1*cm[1]+N2*cm[3] );
+ #  
+ #  double new_inf1 = iS1*( cm[0]*patch1 + cm[1]*patch2 );
+ #  double new_inf2 = iS2*( cm[2]*patch1 + cm[3]*patch2 );
+ 
+for( ii in 1:nrow(par) ){
+  dur_int <- as.double( par[ ii, 5 ] )
+  t_int_stop <- dur_int + t_int_start
+  b1 <- as.double( par[ ii, 1 ] ) / base_dur
+  b2 <- as.double( par[ ii, 6 ] ) / base_dur 
+  mix <- as.double( par[ ii, 3 ] )
+  cm <- c( 1 - mix, mix, mix, 1-mix )
+  final_b1 <- as.double( par[ ii, 4 ] ) / base_dur
+  final_b2 <- as.double( par[ ii, 4 ] ) / base_dur
+  for( tt in 1:nr ){  
+    time_diff <- tt - t_int_start;
+    rrxa <- params$rel_rate_isol_asymp
+    beta1[tt,ii] = b1
+    beta2[tt,ii] = b2 
+    R1[tt,ii] = as.double( par[ ii, 1 ])
+    R2[tt,ii] = as.double( par[ ii, 6 ])
+    if( 0 < time_diff & time_diff <= dur_int ){
+      rate[tt, ii] <- base_rate + time_diff*(max_rate - base_rate)/dur_int;
+      rrxa <- time_diff/dur_int;
+      rate_asymp[tt, ii] <- 1/(rate[tt, ii]*rrxa)
+      beta1[tt,ii] = b1 - time_diff*(b1 - final_b1)/dur_int;
+      beta2[tt,ii] = b2 - time_diff*(b2 - final_b2)/dur_int;
+      # patch1 = beta1_t*( I1*cm[0]+I2*cm[2] )/( N1*cm[0]+N2*cm[2] );
+      # patch2 = beta2_t*( I1*cm[1]+I2*cm[3] )/( N1*cm[1]+N2*cm[3] );
+      # new_inf1 = iS1*( cm[0]*patch1 + cm[1]*patch2 );
+      # new_inf2 = iS2*( cm[2]*patch1 + cm[3]*patch2 );
+    }
+    else if( dur_int < time_diff ){
+      rrxa <- 1
+      rate[tt, ii] <- max_rate
+      rate_asymp[tt, ii] <- max_rate
+      beta1[tt,ii] = final_b1
+      beta2[tt,ii] = final_b2
+    }
+    dur[tt, ii] <- (1-fa)/(gamma+rate[tt, ii]) + fa/(gamma+rate[tt, ii]*rrxa)
+    R1[tt,ii] = beta1[tt,ii] * dur[tt, ii]
+  }
+}
+
+nr <- nrow( CI_high )
+nc <- ncol( CI_high )
+
+new_inf_high <- CI_high 
+new_inf_low <- CI_low  
+new_inf_high[ 2:nr, ] <- CI_high[ 2:nr, ] - CI_high[ 1:(nr-1), ]
+new_inf_low[ 2:nr, ] <- CI_low[ 2:nr, ] - CI_low[ 1:(nr-1), ] 
+
+Rt_high <- matrix( nrow=nr, ncol=nc )
+Rt_low <- Rt_high
+Rt_tot <- Rt_high
+new_inf_tot <- new_inf_low + new_inf_high
+
+I_tot <- I_low + I_high
+
+# beta1*I_high*(N-CI)/N = new_inf_high
+beta1 = new_inf_high/I_high*N/(N-CI)
+Rt1 = beta1*dur
+
+for( ii in 1:nr ){
+  for( jj in 1:nc ){
+    # if(  I_high[ ii, jj ] > 0 ) {
+    #   Rt_high[ii,jj] <- dur[ii,jj] * new_inf_high[ii,jj] / I_high[ii,jj] * params$pop_high/(params$pop_high-CI_high[ii,jj])
+    # }
+    # if( I_low[ ii, jj ] > 0 ){
+    #   Rt_low[ii,jj] <- dur[ii,jj] * new_inf_low[ii,jj] / I_low[ ii, jj ] * params$pop_low/(params$pop_low-CI_low[ii,jj])
+    # }
+    # if( I_tot[ ii, jj ] > 0 ){
+    #   Rt_tot[ii,jj] <- dur[ii,jj] * new_inf_tot[ii,jj] / I_tot[ ii, jj ] * (params$pop_high+params$pop_low)/(params$pop_high+params$pop_low-CI_high[ii,jj]-CI_low[ii,jj])
+    # }
+
+  Rt_high[ii,jj] <- dur[ii,jj]*beta1[ii,jj]
+  Rt_low[ii,jj] <- dur[ii,jj]*beta2[ii,jj]
+  Rt_tot[ii,jj] <- dur[ii,jj]*beta1[ii,jj]
+  }
+}
+
+# for( ii in 1:nr ){
+#   for( jj in 1:nc ){ 
+#    if( I_tot[ ii, jj ] > 0 ){  
+#      x=3
+#      if( ii == 1 ){
+#        x = 0
+#      }
+#      else if( ii == 2 ){
+#        x = 1
+#      }
+#      else if( ii == 3){
+#        x = 2
+#      }
+#      else{
+#      }
+#      Rt_tot[ ii, jj ] <- (1/params$rate_isol)*sum(new_inf_tot[ (ii-x):ii, jj ]) / sum(I_tot[ (ii-x):ii, jj ])
+#     }
+#   }
+# }
+
+Rt_high_summary <- apply( Rt_high, 1, quantile, probs=c(0.025, 0.25, 0.5, 0.75, 0.975), na.rm=TRUE )
+Rt_low_summary <- apply( Rt_low, 1, quantile, probs=c(0.025, 0.25, 0.5, 0.75, 0.975), na.rm=TRUE )
+Rt_tot_summary <- apply( Rt_tot, 1, quantile, probs=c(0.025, 0.25, 0.5, 0.75, 0.975), na.rm=TRUE )
+
+Rt_summary <- data.frame( date=dates, 
+                        q500_hr=Rt_high_summary[3, ], 
+                        q025_hr=Rt_high_summary[1, ],
+                        q975_hr=Rt_high_summary[5, ], 
+                        q250_hr=Rt_high_summary[2, ], 
+                        q750_hr=Rt_high_summary[4, ],
+                        
+                        q500_lr=Rt_low_summary[3, ], 
+                        q025_lr=Rt_low_summary[1, ],
+                        q975_lr=Rt_low_summary[5, ],
+                        q250_lr=Rt_low_summary[2, ],
+                        q750_lr=Rt_low_summary[4, ],
+                        
+                        q500_tot=Rt_tot_summary[3, ], 
+                        q025_tot=Rt_tot_summary[1, ],
+                        q975_tot=Rt_tot_summary[5, ],
+                        q250_tot=Rt_tot_summary[2, ],
+                        q750_tot=Rt_tot_summary[4, ])
+
+library(ggplot2)
+ggplot( Rt_summary[-1,] ) +
+  geom_ribbon( aes(x=date, ymin=q025_hr, ymax=q975_hr), fill="red", alpha=0.2) +
+  geom_ribbon( aes(x=date, ymin=q250_hr, ymax=q750_hr), fill="red", alpha=0.4) +
+  geom_line( aes(x=date, y=q500_hr), color="red" ) +
+  # geom_ribbon( aes(x=date, ymin=q025_lr, ymax=q975_lr), fill="blue", alpha=0.1) +
+  # geom_line( aes(x=date, y=q500_lr), color="blue" ) +
+  # geom_ribbon( aes(x=date, ymin=q025_tot, ymax=q975_tot), alpha=0.4) +
+  # geom_line( aes(x=date, y=q500_tot), size=1.2 ) +
+  geom_hline( yintercept=1, color='darkred', linetype = "dashed") +
+  labs(title="Shincheonji", x="Date", y="Effective reproduction number") +
+  scale_x_date() +
+  scale_y_continuous( breaks=c(1,5,10,15,20), labels=c(1,5,10,15,20) ) +
+  theme_bw(base_size = 14) + 
+  annotate( "text", x=ymd("2020-02-07"), y=22, size=5, label="C", hjust=0, vjust=0.5 )
+
+#  tstamp <- format( Sys.time(), "%m%dT%H%M" )
+ # ggsave( paste0("plots/eff_R0_shincheonji", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )
+
+ ggplot( Rt_summary[-1,] ) +
+  geom_ribbon( aes(x=date, ymin=q025_lr, ymax=q975_lr), fill="blue", alpha=0.2) +
+  geom_ribbon( aes(x=date, ymin=q250_lr, ymax=q750_lr), fill="blue", alpha=0.4) +
+  geom_line( aes(x=date, y=q500_lr), color="blue" ) +
+  geom_hline( yintercept=1, color='darkred', linetype = "dashed") +
+  labs(title="Non-Shincheonji", x="Date", y="Effective reproduction number") +
+  scale_x_date() +
+  scale_y_continuous( breaks=c(1,5,10,15,20), labels=c(1,5,10,15,20) ) +
+  theme_bw(base_size = 14)  
+  # annotate( "text", x=ymd("2020-02-07"), y=22, size=5, label="C", hjust=0, vjust=0.5 )
+
+#  tstamp <- format( Sys.time(), "%m%dT%H%M" )
+ # ggsave( paste0("plots/eff_R0_low_risk_", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )
+ 
+ ggplot( Rt_summary[-1,] ) +
+  geom_ribbon( aes(x=date, ymin=q025_tot, ymax=q975_tot), alpha=0.4) +
+  geom_line( aes(x=date, y=q500_tot), size=1 ) +
+  geom_hline( yintercept=1, color='darkred', linetype = "dashed") +
+  labs(title="Total", x="Date", y="Effective reproduction number") +
+  scale_x_date() +
+  scale_y_continuous( breaks=c(1,5,10,15,20,25), labels=c(1,5,10,15,20,25) ) +
+  theme_bw(base_size = 14) + 
+  annotate( "text", x=ymd("2020-02-07"), y=25, size=5, label="C", hjust=0, vjust=0.5 )
+
+#  tstamp <- format( Sys.time(), "%m%dT%H%M" )
+ # ggsave( paste0("plots/eff_R0", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )
+```
+
+
+
+### RUN 2-Group SEIR Tauleap (manual exploration)
+```{r}
+rm(list=ls())
+library(tidyverse)
+library(Rcpp) 
+sourceCpp("codes/seir_2grp_tauleap_cpp.cpp")
+# sourceCpp("codes/seir_3grp_tauleap_cpp.cpp")
+source( "codes/read_inputs.R" )
+source( "codes/load_data.R" )
+source( "codes/model_functions.R" )
+
+set.seed(123)
+
+params_est <- readin_params( "inputs/par.csv", cont_mat="inputs/cont_mat_2grp.csv" )
+params <- params_est[["params"]]
+
+nsim <- 100 + 1
+
+res_high <- as.data.frame( matrix(nrow=(params[["ndays"]]), ncol=nsim) )
+res_low <- as.data.frame( matrix(nrow=(params[["ndays"]]), ncol=nsim) )
+I_high <- as.data.frame( matrix(nrow=(params[["ndays"]]), ncol=nsim) )
+I_low <- as.data.frame( matrix(nrow=(params[["ndays"]]), ncol=nsim) )
+CI_high <- as.data.frame( matrix(nrow=(params[["ndays"]]), ncol=nsim))
+CI_low <- as.data.frame( matrix(nrow=(params[["ndays"]]), ncol=nsim) )
+
+## dates on the first column 
+res_high[,1] <- seq( ymd("2020/02/7"), by="day", length.out=nrow(res_high) ) 
+res_low[,1] <- res_high[,1] 
+
+# date_change_start = ymd("2020-04-23")
+# params$pop3_contact_start = which(res_high$V1 == date_change_start )
+# params$base_behavior_start = params$pop3_contact_start 
+# params$beta1 <- 1.4
+# I01 <- 11
+# params$init$I1 <- (1-params$frac_asymp)* I01
+# params$init$A1 <- params$frac_asymp* I01
+# params$init$S1 <- params$pop_high - I01
+# mix <- 0.00075
+# params$cm <- c( 1 - mix, mix, mix, 1-mix )
+# params$time_intervention_stop <- params$time_intervention_start + 16
+# params$min_beta1 <- 0.1
+# params$min_beta2 <- 0.1
+# params$min_delay <- 1
+  
+for( ii in 1:(nsim-1) ){
+
+  res <- seir_2grp_tauleap( params )
+
+  res_high[ , ii+1 ] <- res$X1[ params$day_filter ]
+  res_low[ , ii+1 ] <- res$X2[ params$day_filter ]
+  I_high[ , ii+1 ] <- res$I1[ params$day_filter ]
+  CI_high[ , ii+1 ] <- res$CI1[ params$day_filter ]
+  I_low[ , ii+1 ] <- res$I2[ params$day_filter ]
+  CI_low[ , ii+1 ] <- res$CI2[ params$day_filter ]
+  
+}
+### cumulative incidence
+nc <- ncol( res_high )
+nr <- nrow( res_high )
+res_tot <- res_high
+res_tot[,2:nc] <- res_high[,2:nc] + res_low[,2:nc] # excluding dates on the first column
+pr <- c(0.025, 0.25, 0.5, 0.75, 0.975)
+  
+res_tot_summary = apply( res_tot[,2:nc], 1, quantile, probs=pr )
+res_high_summary = apply( res_high[,2:nc], 1, quantile, probs=pr )
+res_low_summary = apply( res_low[,2:nc], 1, quantile, probs=pr )
+
+
+
+sim <- data.frame(rbind(
+    data.frame(pop = 1, date=res_high$V1, q025=res_high_summary[1,], 
+               q250=res_high_summary[2,], q500=res_high_summary[3,],  
+               q750=res_high_summary[4,], q975=res_high_summary[5,]),
+    data.frame(pop = 2, date=res_high$V1, q025=res_low_summary[1,], 
+               q250=res_low_summary[2,], q500=res_low_summary[3,],  
+               q750=res_low_summary[4,], q975=res_low_summary[5,]),
+    data.frame(pop = 3, date=res_high$V1, q025=res_tot_summary[1,], 
+               q250=res_tot_summary[2,], q500=res_tot_summary[3,],
+               q750=res_tot_summary[4,], q975=res_tot_summary[5,])))
+
+daily_low <- res_low[ 2:nr, ] - res_low[ 1:(nr-1), ] 
+daily_high <- res_high[ 2:nr, ] - res_high[ 1:(nr-1), ] 
+
+d_high_summary = apply( daily_high[, 2:nc ], 1, quantile, probs=pr )
+d_low_summary = apply( daily_low[ , 2:nc ], 1, quantile, probs=pr )
+
+sim_daily <- data.frame(rbind(
+    data.frame(pop = 1, date=res_high$V1[2:nr], q025=d_high_summary[1,], 
+               q250=d_high_summary[2,], q500=d_high_summary[3,],  
+               q750=d_high_summary[4,], q975=d_high_summary[5,]),
+    data.frame(pop = 2, date=res_high$V1[2:nr], q025=d_low_summary[1,], 
+               q250=d_low_summary[2,], q500=d_low_summary[3,],  
+               q750=d_low_summary[4,], q975=d_low_summary[5,])　) )
+
+sim_daily$pop <- factor( sim_daily$pop, labels=c("High risk", "Low risk") )
+sim$pop <- factor( sim$pop, labels=c("High risk", "Low risk", "Total") )
+
+low <- dplyr::filter( sim, pop =="Low risk" )
+high <- dplyr::filter( sim, pop =="High risk" )
+ggplot( low ) +
+  # geom_ribbon( aes(x=date, ymin=q025, ymax=q975), fill="blue",  alpha=0.1) +
+  # geom_ribbon( aes(x=date, ymin=q250, ymax=q750), fill="blue",  alpha=0.2) +
+  geom_line( aes(date, q500), color="blue", size=1.2 ) +
+  # geom_ribbon( data=high, aes(x=date, ymin=q025, ymax=q975), fill="red", alpha=0.1, inherit.aes=FALSE) +
+  # geom_ribbon( data=high, aes(x=date, ymin=q250, ymax=q750),  fill="red", alpha=0.2, inherit.aes=FALSE) +
+  geom_line( data=high, aes(date, q500), color="red", size=1.2, inherit.aes=FALSE ) +
+  geom_point( data=DAT, aes(date, low), color="blue", inherit.aes=FALSE ) +
+  geom_point( data=DAT, aes(date, shincheonji), color="red", inherit.aes=FALSE ) +
+  labs(x="Date", y="Cumulative number of cases") +
+  scale_x_date() 
+
+d_low <- dplyr::filter( sim_daily, pop =="Low risk" )
+d_high <- dplyr::filter( sim_daily, pop =="High risk" )
+ggplot( d_low ) +
+  geom_line( aes(date, q500), color="blue", size=1.2 ) +
+  geom_line( data=d_high, aes(date, q500), color="red", size=1.2, inherit.aes=FALSE ) +
+  geom_point( data=DAT, aes(date, daily_low), color="blue", inherit.aes=FALSE ) +
+  geom_point( data=DAT, aes(date, daily_shincheonji), color="red", inherit.aes=FALSE ) +
+  labs(x="Date", y="Cumulative number of cases") +
+  scale_x_date() +
+  theme_bw(base_size = 12)
+
+
+# tstamp <- format( Sys.time(), "%m%dT%H%M" )
+# ggsave( paste0("plots/return_to_normal_", date_change_start, "_", tstamp, ".png"), width=3.4*2, height=2.7*2, units="in" )
+
+# text( ymd("2020-03-1"), 1.2e4, paste0("Outbreak size (median) = ", formatC(q500, format="d", big.mark=',') ), pos=4 )
+# text( ymd("2020-03-1"), 1.1e4, paste0("Outbreak size (50%) = ", formatC(q250, format="d", big.mark=','), ", ",  formatC(q500, format="d", big.mark=',')), pos=4  )
+# text( ymd("2020-03-1"), 1.0e4, paste0("Outbreak size (95%) = ", formatC(q025, format="d", big.mark=','), ", ",  formatC(q975, format="d", big.mark=',')), pos=4  )
+
+
+
+```
