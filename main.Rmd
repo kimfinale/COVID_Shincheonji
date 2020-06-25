@@ -129,13 +129,13 @@ ggsave( "plots/after_impute.png", p, width=3.4, height=2.7, units="in" )
 ```
 
 
-### FIT ABC SMC two-group SEIR tauleap
+### Fitting via Approximate Bayesian Computation Sequential Monte Carlo
 ```{r}
 rm(list=ls())
 library(tmvtnorm)
 library(truncnorm)
 library(Rcpp) 
-sourceCpp( "func/seir_2grp_tauleap_cpp.cpp" )
+sourceCpp( "models/seir_2grp_tauleap_cpp.cpp" )
 source( "func/read_inputs.R" )
 source( "func/load_data.R" )  
 source( "func/model_functions.R" )
@@ -150,12 +150,11 @@ max_diff_low <- sqrt( sum( (2*DAT$daily_low)^2, na.rm=T ) )
 epsilon_inc_high <- seq( max_diff_high, round(0.06*max_diff_high), length.out=20 )
 epsilon_inc_low <- seq( max_diff_low, round(0.06*max_diff_low), length.out=20 )
 
-
 G <- length( epsilon_inc_high )# Generations of SMC
 N <- 200 # Number of particles
 n <- 3 # Number of simulations for each parameter set (since it's a deterministic model)
-lb <- c( 1,   1, 1e-6, 1e-3,  1, 1e-3  )
-ub <- c( 20, 50,  0.1,   10, 30,   20 )
+lb <- c( 1,   1e-3, 1e-3,  1,  1e-6, 1  )
+ub <- c( 15,  10,   10,   20,   0.5,  30 )
 np <- length( lb ) #number of parameters
 res_old <- matrix( ncol=np, nrow=N ) #to store SMC samples for the parameters
 res_new <- matrix( ncol=np, nrow=N )
@@ -172,56 +171,54 @@ for( g in 1:G ){
     while( i <= N ){
         if( g == 1 ){ # start using prior distributions
             par <- runif( np, min=lb, max=ub )
+            # par <- c( 8, 2, 0.4, 10, 1e-4, 14 )
             R01 <- par[1]
-            I01 <- (1-params$frac_asymp) * par[2]
-            A01 <- params$frac_asymp * par[2]
-            frac_mix <- par[3]
-            final_R01 <- par[4]
-            dur_intervention <- par[5]
-            R02 <- par[6]
-            final_R02 <- par[4]
+            R02 <- par[2]
+            final_R01 <- par[3]
+            final_R02 <- par[3]
+            I01 <- (1-params$frac_asymp) * par[4]
+            A01 <- params$frac_asymp * par[4]
+            frac_mix <- par[5]
+            dur_intervention <- par[6]
             
         } else {
             p <- sample( seq(1,N), 1, prob=w_old )
             par <- rK( res_old[ p, ], sigma )#  Select particle from previous generation
             R01 <- par[1]
-            I01 <- (1-params$frac_asymp) * par[2]
-            A01 <- params$frac_asymp * par[2]
-            frac_mix <- par[3]
-            final_R01 <- par[4]
-            dur_intervention <- par[5]
-            R02 <- par[6]
-            final_R02 <- par[4]
+            R02 <- par[2]
+            final_R01 <- par[3]
+            final_R02 <- par[3]
+            I01 <- (1-params$frac_asymp) * par[4]
+            A01 <- params$frac_asymp * par[4]
+            frac_mix <- par[5]
+            dur_intervention <- par[6]
         }
         #  Test if prior non zero
-        if( prior_non_zero( c( R01, I01, frac_mix, final_R01, dur_intervention, R02) ) &
+        if( prior_non_zero( c( R01, R02, final_R01, I01, frac_mix, dur_intervention ) ) &
             final_R01 < R01 & final_R02 < R02 ) {
             # Set number of accepted simulations to zero
             m <- 0
             distance <- matrix( ncol=2, nrow=n ) # # data = 2
             for( j in 1:n ){
                 params$R01 <- R01
+                params$R02 <- R02
+                params$final_R02 <- final_R02
+                params$final_R01 <- final_R01
                 params$init$I1 <- round(I01)
                 params$init$A1 <- round(A01)
                 params$init$S1 <- params$pop_high - I01
                 params$cm <- c(1-frac_mix, frac_mix, frac_mix, 1-frac_mix)
-                params$final_R01 <- final_R01
                 params$time_intervention_stop <- params$time_intervention_start + dur_intervention
-                params$R02 <- R02
-                params$final_R02 <- final_R02
                 
                 Dstar <- run_model_tauleap( params )     
                 calc_dist <- calc_distance( Dstar[[1]], Dstar[[2]] )
                 distance[ j, ] <- calc_dist    
-                if( (calc_dist[1] <= epsilon_inc_high[g]) & (calc_dist[2] <= epsilon_inc_low[g])){
+                if( (calc_dist[1] <= epsilon_inc_high[g]) & (calc_dist[2] <= epsilon_inc_low[g]) ){
                     m <- m + 1
                 }
-                # if( (calc_dist[1] + calc_dist[2]) <= (epsilon_inc_high[g] + epsilon_inc_low[g]) ){
-                #     m <- m + 1
-                # }
             }   
             if( m > 0 ){
-                res_new[ i, ]<- c( R01, I01, frac_mix, final_R01, dur_intervention, R02 )   # Store results
+                res_new[ i, ]<- c( R01, R02, final_R01, I01, frac_mix, dur_intervention )  # Store results
                 w1 <- prod( sapply(1:length(ub), function(x) dunif( res_new[ i, x ], min=lb[x], max=ub[x] ) ) ) # Calculate weights
                 if( g==1 ){
                     w2 <- 1
@@ -251,9 +248,205 @@ for( g in 1:G ){
 }
 
 write.csv( res_new, paste0("outputs/samples_", tstamp, ".csv"), row.names=FALSE  )
-write.csv( params, paste0("outputs/params_", tstamp, ".csv"), row.names=FALSE )
+saveRDS( params, paste0("outputs/params_", tstamp, ".rds" ) )
 saveRDS( seir_2grp_tauleap, paste0("outputs/seir_2grp_tauleap_", tstamp, ".rds") )
 ```
+
+
+### Run the model and save the results 
+```{r}
+# tstamp <- "0522T1228"
+# tstamp <- "0614T2133"
+tstamp <- "0624T2024"
+
+library( Rcpp )
+library( tidyverse )
+library( lubridate )
+sourceCpp( "models/seir_2grp_tauleap_cpp.cpp" )
+source( "func/read_inputs.R" )
+source( "func/load_data.R" )
+source( "func/model_functions.R" )
+
+par <- read_csv( paste0( "outputs/samples_", tstamp, ".csv" ) ) ## estimated params
+DAT <- read_csv( paste0( "outputs/DAT_", tstamp, ".csv" ) )
+params <- readRDS( paste0( "outputs/params_", tstamp, ".rds" ) )
+set.seed(123)
+
+# params_est <- readin_params( "inputs/par.csv", cont_mat="inputs/cont_mat_2grp.csv" )
+# params <- params_est[["params"]]
+
+## alternative definitions (tstamp <- "0614T2133")
+# params$delta <- 1/((1/params$delta) - 2.2)
+# params$rate_isol <- 1/((1/params$rate_isol) + 2.2)
+
+nday <- as.integer(params[["ndays"]])
+
+res_high <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+res_low <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+I_high <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+I_low <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+CI_high <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+CI_low <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
+
+## dates on the first column
+dates <- seq( ymd("2020-02-07"), by="day", length.out=nrow(res_high) )
+res_high[,1] <- dates
+res_low[,1] <- dates
+
+for( ii in seq_len(nrow(par)) ){
+
+  params$R01 <- as.double( par[ ii, 1 ] )
+  params$R02 <- as.double( par[ ii, 2 ] )
+  params$final_R01 <- as.double( par[ ii, 3 ] )
+  params$final_R02 <-  as.double( par[ ii, 3 ] )
+  I01 <- (1-params$frac_asymp) * as.double( par[ ii, 4 ] )
+  A01 <- params$frac_asymp * as.double( par[ ii, 4 ] )
+  params$init$I1 <- round( I01 )
+  params$init$A1 <- round( A01 )
+  params$init$S1 <- params$pop_high - I01
+  mix <- as.double( par[ ii, 5 ] )
+  params$cm <- c( 1 - mix, mix, mix, 1-mix )
+  params$time_intervention_stop <- params$time_intervention_start + as.double( par[ ii, 6 ] )
+ 
+  res <- seir_2grp_tauleap( params )
+
+  res_high[ , ii ] <- res$X1[ params$day_filter ]
+  res_low[ , ii ] <- res$X2[ params$day_filter ]
+  I_high[ , ii ] <- res$I1[ params$day_filter ]
+  CI_high[ , ii ] <- res$CI1[ params$day_filter ]
+  I_low[ , ii ] <- res$I2[ params$day_filter ]
+  CI_low[ , ii ] <- res$CI2[ params$day_filter ]
+
+}
+
+### cumulative incidence
+nc <- ncol( res_high )
+nr <- nrow( res_high )
+
+res_tot <- res_high + res_low # excluding dates on the first column
+pr <- c(0.025, 0.25, 0.5, 0.75, 0.975)
+
+inc_high <- CI_high
+inc_low <- CI_low
+inc_low <- CI_low[ 2:nr, ] - CI_low[ 1:(nr-1), ]
+inc_high <- CI_high[ 2:nr, ] - CI_high[ 1:(nr-1), ]
+
+res_tot_summary = apply( res_tot, 1, quantile, probs=pr )
+res_high_summary = apply( res_high, 1, quantile, probs=pr )
+res_low_summary = apply( res_low, 1, quantile, probs=pr )
+
+inc_high_summary = apply( inc_high, 1, quantile, probs=pr )
+inc_low_summary = apply( inc_low, 1, quantile, probs=pr )
+
+sim <- data.frame(rbind(
+    data.frame(pop = 1, date=dates, q025=res_high_summary[1,],
+               q250=res_high_summary[2,], q500=res_high_summary[3,],
+               q750=res_high_summary[4,], q975=res_high_summary[5,]),
+    data.frame(pop = 2, date=dates, q025=res_low_summary[1,],
+               q250=res_low_summary[2,], q500=res_low_summary[3,],
+               q750=res_low_summary[4,], q975=res_low_summary[5,]),
+    data.frame(pop = 3, date=dates, q025=res_tot_summary[1,],
+               q250=res_tot_summary[2,], q500=res_tot_summary[3,],
+               q750=res_tot_summary[4,], q975=res_tot_summary[5,])))
+
+daily_low <- res_low
+daily_low[ 2:nr, ] <- res_low[ 2:nr, ] - res_low[ 1:(nr-1), ]
+daily_high <- res_high
+daily_high[ 2:nr, ] <- res_high[ 2:nr, ] - res_high[ 1:(nr-1), ]
+
+d_high_summary = apply( daily_high, 1, quantile, probs=pr )
+d_low_summary = apply( daily_low, 1, quantile, probs=pr )
+
+sim_daily <- data.frame(rbind(
+    data.frame(pop = 1, date=dates, q025=d_high_summary[1,],
+               q250=d_high_summary[2,], q500=d_high_summary[3,],
+               q750=d_high_summary[4,], q975=d_high_summary[5,]),
+    data.frame(pop = 2, date=dates, q025=d_low_summary[1,],
+               q250=d_low_summary[2,], q500=d_low_summary[3,],
+               q750=d_low_summary[4,], q975=d_low_summary[5,])　) )
+
+sim_daily$pop <- factor( sim_daily$pop, labels=c("High risk", "Low risk") )
+sim$pop <- factor( sim$pop, labels=c("High risk", "Low risk", "Total") )
+
+# saveRDS( sim, paste0("outputs/sim_", tstamp, ".rds" ) )
+# saveRDS( sim_daily, paste0("outputs/sim_daily_", tstamp, ".rds" ) )
+
+```
+
+### Figure of model simulation based on 
+```{r}
+sim <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
+sim_daily <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
+
+library(ggplot2)
+theme_set( theme_bw(base_size = 12) )
+total <- dplyr::filter( sim, pop == "Total" )
+high <- dplyr::filter( sim, pop == "High risk" )
+
+
+d0 <- read_xlsx( "data/covid_daegu.xlsx", "incidence")
+d <- d0[,1:5]
+d$date <- ymd(d$date)
+names( d ) <- c( "date", "daily_total", "daily_shincheonji", "Total", "Shincheonji" )
+# dd <- tidyr::gather( d, key, val, -c(date, daily_total, daily_shincheonji, Total ) )
+dfs <- ymd("2020-02-07") # date first symptom
+dfc <- ymd("2020-02-18") # date first confirm
+dpc <- ymd("2020-02-22") #date policy change
+dg <- c(ymd("2020-02-15"), ymd("2020-03-01"), ymd("2020-03-15"), ymd("2020-04-01")) # regular dates for guidance
+
+xd <- ymd("2020-02-07")
+yy <- 7800 
+
+plt <- ggplot( d ) +
+  geom_bar( aes( date, Total), stat="identity", fill=NA, color="black") +
+  geom_bar( aes( date, Shincheonji), stat="identity", fill="grey50") +
+  # geom_ribbon( data=total, aes(x=date, ymin=q025, ymax=q975), fill="steelblue",  alpha=0.2, inherit.aes=F ) +
+  geom_ribbon( data=total, aes(x=date, ymin=q250, ymax=q750), fill="steelblue",  alpha=0.4, inherit.aes=F ) +
+  geom_line( data=total, aes(date, q500), color="steelblue", size=1.2, inherit.aes=F ) +
+  # geom_ribbon( data=high, aes(x=date, ymin=q025, ymax=q975), fill="darkred",  alpha=0.2, inherit.aes=F ) +
+  geom_ribbon( data=high, aes(x=date, ymin=q250, ymax=q750), fill="darkred",  alpha=0.4, inherit.aes=F ) +
+  geom_line( data=high, aes(date, q500), color="darkred", size=1.2, inherit.aes=F ) +
+  # scale_y_continuous( limits=c(0,8000)) +
+  scale_x_date( limits=c(ymd("2020-02-05"), max(d$date)+1 ), 
+                labels=c(dfs, dfc, dpc, dg), 
+                breaks=c(dfs, dfc, dpc, dg), 
+                date_labels = "%b %d") +
+  labs(y="Cumulative confirmed cases", x="Date", size=7 ) +
+  theme( axis.text.x = element_text(angle = 45, hjust=1) ) +
+  theme( axis.title.y = element_text(size=11) ) +
+
+  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy, ymax=yy+200, alpha=0.4, fill="steelblue") +
+  annotate( "segment", x=xd, xend=xd+2, y=yy+100, yend=yy+100, size=1, color="steelblue" ) +
+  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy-300, ymax=yy-100, alpha=0.4, fill="darkred") +
+  annotate( "segment", x=xd, xend=xd+2, y=yy-200, yend=yy-200, size=1, color="darkred" ) +
+  annotate( "text", x=xd+3, y=yy+100, size=1.5, label="Total (model)", hjust=0, vjust=0.5 ) +
+  annotate( "text", x=xd+3, y=yy-200, size=1.5, label="Shincheonji (model)", hjust=0, vjust=0.5 ) + 
+  
+  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy-600, ymax=yy-400, fill=NA, color="black" ) +
+  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy-900, ymax=yy-700, fill="grey50", color="black" ) +
+  annotate( "text", x=xd+3, y=yy-500, size=1.5, label="Total (data)", hjust=0, vjust=0.5 ) +
+  annotate( "text", x=xd+3, y=yy-800, size=1.5, label="Shincheonji (data)", hjust=0, vjust=0.5 ) +
+  annotate( "text", x=ymd("2020-3-31"), y=8000, label="A", hjust=0, vjust=0.5, size=3 )
+ 
+plt
+
+# ggsave( paste0("plots/cumul_data_model_", tstamp, ".png"), plt, width=3.4, height=2.7, units="in" )
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ### Sensitivity analysis 1 - fitting the model under the assumption that infected people become infectious 2-3 days prior to symptom onset
@@ -262,10 +455,10 @@ rm(list=ls())
 library(tmvtnorm)
 library(truncnorm)
 library(Rcpp) 
-sourceCpp( "codes/seir_2grp_tauleap_cpp.cpp" )
-source( "codes/read_inputs.R" )
-source( "codes/load_data.R" )  
-source( "codes/model_functions.R" )
+sourceCpp( "models/seir_2grp_tauleap_cpp.cpp" )
+source( "func/read_inputs.R" )
+source( "func/load_data.R" )  
+source( "func/model_functions.R" )
 # params_est <- readin_params( "inputs/par_fa_010.csv", cont_mat="inputs/cont_mat_3grp.csv" )
 params_est <- readin_params( "inputs/par.csv", cont_mat="inputs/cont_mat_2grp.csv" )
 params <- params_est[["params"]]
@@ -513,131 +706,11 @@ mcmc_pairs( p2, pars = c("R01", "I0"),
 # pp <- bayesplot_grid(plots = plots)
 # tstamp <- format( Sys.time(), "%m%dT%H%M" )
 # ggsave(paste0( "plots/pairs_", tstamp, ".png"), pp, width=3.4*2, height=2.7*2, units="in" )
-
-
-
 ```
 
-### Run 2 Group SEIR Tauleap 
-```{r}
 
-tstamp <- "0522T1228"
-tstamp <- "0614T2133"
-library(Rcpp)
-library(tidyverse)
-sourceCpp( "codes/seir_2grp_tauleap_cpp.cpp" )
-source( "codes/read_inputs.R" )
-source( "codes/load_data.R" )
-source( "codes/model_functions.R" )
-
-par <- read_csv( paste0( "outputs/samples_", tstamp, ".csv" ) ) ## estimated params
-DAT <- read_csv( paste0( "outputs/DAT_", tstamp, ".csv" ) )
-params <- read_csv( paste0( "outputs/params_", tstamp, ".csv" ) )
-# xx <- readRDS( paste0( "outputs/seir_2grp_tauleap_", tstamp, ".rds" ) )
-
-set.seed(123)
-
-params_est <- readin_params( "inputs/par.csv", cont_mat="inputs/cont_mat_2grp.csv" )
-params <- params_est[["params"]]
-
-## alternative definitions (tstamp <- "0614T2133")
-params$delta <- 1/((1/params$delta) - 2.2)
-params$rate_isol <- 1/((1/params$rate_isol) + 2.2)
-
-nday <- as.integer(params[["ndays"]])
-
-res_high <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
-res_low <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
-I_high <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
-I_low <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
-CI_high <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
-CI_low <- as.data.frame( matrix(nrow=nday, ncol=(nrow(par)) ) )
-
-## dates on the first column
-dates <- seq( ymd("2020-02-07"), by="day", length.out=nrow(res_high) )
-res_high[,1] <- dates
-res_low[,1] <- dates
-
-for( ii in seq_len(nrow(par)) ){
-
-  params$R01 <- as.double( par[ ii, 1 ] )
-  I01 <- (1-params$frac_asymp) * as.double( par[ ii, 2 ] )
-  A01 <- params$frac_asymp * as.double( par[ ii, 2 ] )
-  params$init$I1 <- round( I01 )
-  params$init$A1 <- round( A01 )
-  params$init$S1 <- params$pop_high - I01
-  mix <- as.double( par[ ii, 3 ] )
-  params$cm <- c( 1 - mix, mix, mix, 1-mix )
-  params$final_R01 <- as.double( par[ ii, 4 ] )
-  params$time_intervention_stop <- params$time_intervention_start + as.double( par[ ii, 5 ] )
-  params$R02 <- as.double( par[ ii, 6 ] )
-  params$final_R02 <-  as.double( par[ ii, 4 ] )
-
-  res <- seir_2grp_tauleap( params )
-
-  res_high[ , ii ] <- res$X1[ params$day_filter ]
-  res_low[ , ii ] <- res$X2[ params$day_filter ]
-  I_high[ , ii ] <- res$I1[ params$day_filter ]
-  CI_high[ , ii ] <- res$CI1[ params$day_filter ]
-  I_low[ , ii ] <- res$I2[ params$day_filter ]
-  CI_low[ , ii ] <- res$CI2[ params$day_filter ]
-
-}
-
-### cumulative incidence
-nc <- ncol( res_high )
-nr <- nrow( res_high )
-
-res_tot <- res_high + res_low # excluding dates on the first column
-pr <- c(0.025, 0.25, 0.5, 0.75, 0.975)
-
-inc_high <- CI_high
-inc_low <- CI_low
-inc_low <- CI_low[ 2:nr, ] - CI_low[ 1:(nr-1), ]
-inc_high <- CI_high[ 2:nr, ] - CI_high[ 1:(nr-1), ]
-
-res_tot_summary = apply( res_tot, 1, quantile, probs=pr )
-res_high_summary = apply( res_high, 1, quantile, probs=pr )
-res_low_summary = apply( res_low, 1, quantile, probs=pr )
-
-inc_high_summary = apply( inc_high, 1, quantile, probs=pr )
-inc_low_summary = apply( inc_low, 1, quantile, probs=pr )
-
-sim <- data.frame(rbind(
-    data.frame(pop = 1, date=dates, q025=res_high_summary[1,],
-               q250=res_high_summary[2,], q500=res_high_summary[3,],
-               q750=res_high_summary[4,], q975=res_high_summary[5,]),
-    data.frame(pop = 2, date=dates, q025=res_low_summary[1,],
-               q250=res_low_summary[2,], q500=res_low_summary[3,],
-               q750=res_low_summary[4,], q975=res_low_summary[5,]),
-    data.frame(pop = 3, date=dates, q025=res_tot_summary[1,],
-               q250=res_tot_summary[2,], q500=res_tot_summary[3,],
-               q750=res_tot_summary[4,], q975=res_tot_summary[5,])))
-
-daily_low <- res_low
-daily_low[ 2:nr, ] <- res_low[ 2:nr, ] - res_low[ 1:(nr-1), ]
-daily_high <- res_high
-daily_high[ 2:nr, ] <- res_high[ 2:nr, ] - res_high[ 1:(nr-1), ]
-
-d_high_summary = apply( daily_high, 1, quantile, probs=pr )
-d_low_summary = apply( daily_low, 1, quantile, probs=pr )
-
-sim_daily <- data.frame(rbind(
-    data.frame(pop = 1, date=dates, q025=d_high_summary[1,],
-               q250=d_high_summary[2,], q500=d_high_summary[3,],
-               q750=d_high_summary[4,], q975=d_high_summary[5,]),
-    data.frame(pop = 2, date=dates, q025=d_low_summary[1,],
-               q250=d_low_summary[2,], q500=d_low_summary[3,],
-               q750=d_low_summary[4,], q975=d_low_summary[5,])　) )
-
-sim_daily$pop <- factor( sim_daily$pop, labels=c("High risk", "Low risk") )
-sim$pop <- factor( sim$pop, labels=c("High risk", "Low risk", "Total") )
-
-# saveRDS( sim, paste0("outputs/sim_", tstamp, ".rds" ) )
-# saveRDS( sim_daily, paste0("outputs/sim_daily_", tstamp, ".rds" ) )
-
-sim <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
-sim_daily <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
+# sim <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
+# sim_daily <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
 
 low <- dplyr::filter( sim, pop =="Low risk" )
 high <- dplyr::filter( sim, pop =="High risk" )
@@ -733,60 +806,7 @@ ggplot( d_high ) +
 
 ### Figure 3A. Comparision of cumulative number of cases 
 
-sim <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
-sim_daily <- readRDS( paste0("outputs/sim_", tstamp, ".rds" ) )
 
-library(ggplot2)
-theme_set( theme_bw(base_size = 12) )
-total <- dplyr::filter( sim, pop == "Total" )
-high <- dplyr::filter( sim, pop == "High risk" )
-
-
-d0 <- read_xlsx( "data/covid_daegu.xlsx", "incidence")
-d <- d0[,1:5]
-d$date <- ymd(d$date)
-names( d ) <- c( "date", "daily_total", "daily_shincheonji", "Total", "Shincheonji" )
-# dd <- tidyr::gather( d, key, val, -c(date, daily_total, daily_shincheonji, Total ) )
-dfs <- ymd("2020-02-07") # date first symptom
-dfc <- ymd("2020-02-18") # date first confirm
-dpc <- ymd("2020-02-22") #date policy change
-dg <- c(ymd("2020-02-15"), ymd("2020-03-01"), ymd("2020-03-15"), ymd("2020-04-01")) # regular dates for guidance
-
-xd <- ymd("2020-02-07")
-yy <- 7800 
-
-plt <- ggplot( d ) +
-  geom_bar( aes( date, Total), stat="identity", fill=NA, color="black") +
-  geom_bar( aes( date, Shincheonji), stat="identity", fill="grey50") +
-  # geom_ribbon( data=total, aes(x=date, ymin=q025, ymax=q975), fill="steelblue",  alpha=0.2, inherit.aes=F ) +
-  geom_ribbon( data=total, aes(x=date, ymin=q250, ymax=q750), fill="steelblue",  alpha=0.4, inherit.aes=F ) +
-  geom_line( data=total, aes(date, q500), color="steelblue", size=1.2, inherit.aes=F ) +
-  # geom_ribbon( data=high, aes(x=date, ymin=q025, ymax=q975), fill="darkred",  alpha=0.2, inherit.aes=F ) +
-  geom_ribbon( data=high, aes(x=date, ymin=q250, ymax=q750), fill="darkred",  alpha=0.4, inherit.aes=F ) +
-  geom_line( data=high, aes(date, q500), color="darkred", size=1.2, inherit.aes=F ) +
-  # scale_y_continuous( limits=c(0,8000)) +
-  scale_x_date( limits=c(ymd("2020-02-05"), max(d$date)+1 ), 
-                labels=c(dfs, dfc, dpc, dg), 
-                breaks=c(dfs, dfc, dpc, dg), 
-                date_labels = "%b %d") +
-  labs(y="Cumulative confirmed cases", x="Date", size=7 ) +
-  theme( axis.text.x = element_text(angle = 45, hjust=1) ) +
-  theme( axis.title.y = element_text(size=11) ) +
-
-  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy, ymax=yy+200, alpha=0.4, fill="steelblue") +
-  annotate( "segment", x=xd, xend=xd+2, y=yy+100, yend=yy+100, size=1, color="steelblue" ) +
-  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy-300, ymax=yy-100, alpha=0.4, fill="darkred") +
-  annotate( "segment", x=xd, xend=xd+2, y=yy-200, yend=yy-200, size=1, color="darkred" ) +
-  annotate( "text", x=xd+3, y=yy+100, size=1.5, label="Total (model)", hjust=0, vjust=0.5 ) +
-  annotate( "text", x=xd+3, y=yy-200, size=1.5, label="Shincheonji (model)", hjust=0, vjust=0.5 ) + 
-  
-  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy-600, ymax=yy-400, fill=NA, color="black" ) +
-  annotate( "rect", xmin=xd, xmax=xd+2, ymin=yy-900, ymax=yy-700, fill="grey50", color="black" ) +
-  annotate( "text", x=xd+3, y=yy-500, size=1.5, label="Total (data)", hjust=0, vjust=0.5 ) +
-  annotate( "text", x=xd+3, y=yy-800, size=1.5, label="Shincheonji (data)", hjust=0, vjust=0.5 ) +
-  annotate( "text", x=ymd("2020-3-31"), y=8000, label="A", hjust=0, vjust=0.5, size=3 )
-  
-ggsave( paste0("plots/cumul_data_model_", tstamp, ".png"), plt, width=3.4, height=2.7, units="in" )
 
 ```
 
